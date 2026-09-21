@@ -54,3 +54,38 @@ data class HealthRecordEntity(
     val shortnessOfBreath: Int,
     val feelingTired: Int
 )
+
+fun HealthSession.toEntity(
+    timestamp: Long = System.currentTimeMillis()
+): HealthRecordEntity = HealthRecordEntity(
+    timestamp = timestamp,
+    heartRate = requireNotNull(heartRate) { "Heart rate is required." },
+    respiratoryRate = requireNotNull(respiratoryRate) { "Respiratory rate is required." },
+    nausea = symptomRatings[Symptom.NAUSEA] ?: 0,
+    headache = symptomRatings[Symptom.HEADACHE] ?: 0,
+    diarrhea = symptomRatings[Symptom.DIARRHEA] ?: 0,
+    soreThroat = symptomRatings[Symptom.SORE_THROAT] ?: 0,
+    fever = symptomRatings[Symptom.FEVER] ?: 0,
+    muscleAche = symptomRatings[Symptom.MUSCLE_ACHE] ?: 0,
+    lossOfSmellOrTaste = symptomRatings[Symptom.LOSS_OF_SMELL_OR_TASTE] ?: 0,
+    cough = symptomRatings[Symptom.COUGH] ?: 0,
+    shortnessOfBreath = symptomRatings[Symptom.SHORTNESS_OF_BREATH] ?: 0,
+    feelingTired = symptomRatings[Symptom.FEELING_TIRED] ?: 0
+)
+
+fun HealthRecordEntity.toSession(): HealthSession = HealthSession(
+    heartRate = heartRate,
+    respiratoryRate = respiratoryRate,
+    symptomRatings = mapOf(
+        Symptom.NAUSEA to nausea,
+        Symptom.HEADACHE to headache,
+        Symptom.DIARRHEA to diarrhea,
+        Symptom.SORE_THROAT to soreThroat,
+        Symptom.FEVER to fever,
+        Symptom.MUSCLE_ACHE to muscleAche,
+        Symptom.LOSS_OF_SMELL_OR_TASTE to lossOfSmellOrTaste,
+        Symptom.COUGH to cough,
+        Symptom.SHORTNESS_OF_BREATH to shortnessOfBreath,
+        Symptom.FEELING_TIRED to feelingTired
+    )
+)
