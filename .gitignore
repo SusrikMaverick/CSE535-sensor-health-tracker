@@ -1,0 +1,19 @@
+# IDE and environment files
+*.iml
+.gradle/
+.kotlin/
+.idea/
+local.properties
+.DS_Store
+
+# Generated build files
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# User files
+Project1_Guidelines.md
+Project1_Guidelines.pdf
+recipe.md
+context.md
