@@ -43,4 +43,5 @@ class HealthViewModel : ViewModel() {
             symptomRatings = session.symptomRatings + (symptom to rating)
         )
     }
+
 }

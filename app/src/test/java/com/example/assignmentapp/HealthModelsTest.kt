@@ -71,4 +71,5 @@ class HealthModelsTest {
         assertEquals(123L, entity.timestamp)
         assertEquals(session, entity.toSession())
     }
+
 }
