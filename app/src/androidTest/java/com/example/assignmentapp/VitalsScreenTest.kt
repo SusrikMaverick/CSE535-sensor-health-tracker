@@ -1,20 +1,33 @@
 package com.example.assignmentapp
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.assignmentapp.data.MeasurementState
+import com.example.assignmentapp.sensor.AccelerometerSample
+import com.example.assignmentapp.sensor.AccelerometerSampleSource
+import com.example.assignmentapp.sensor.RespiratoryRateProcessor
+import com.example.assignmentapp.ui.ContinueToSymptomsButton
 import com.example.assignmentapp.ui.HealthViewModel
 import com.example.assignmentapp.ui.MeasurementSection
+import com.example.assignmentapp.ui.VitalsScreen
 import com.example.assignmentapp.ui.canStartHeartRateRecording
 import com.example.assignmentapp.ui.deleteTemporaryVideo
 import com.example.assignmentapp.ui.heartRateCameraError
 import com.example.assignmentapp.ui.heartRatePermissionState
+import com.example.assignmentapp.ui.respiratoryRateHardwareError
 import com.example.assignmentapp.ui.theme.AssignmentAppTheme
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -104,6 +117,213 @@ class VitalsScreenTest {
     }
 
     @Test
+    fun missingAccelerometerReturnsClearError() {
+        val error = respiratoryRateHardwareError(hasAccelerometer = false)
+
+        assertEquals("An accelerometer is not available on this device.", error)
+        setMeasurement(
+            title = "Respiratory rate",
+            state = MeasurementState.Error(requireNotNull(error)),
+            unit = "breaths/min",
+            onRetry = null
+        )
+
+        composeRule.onNodeWithText(error).assertIsDisplayed()
+        composeRule.onNodeWithText("Retry").assertDoesNotExist()
+    }
+
+    @Test
+    fun respiratoryInstructionsAndResultAreDisplayed() {
+        val instructions =
+            "Lie down and place the phone flat on your chest. Keep still and breathe normally during the 45-second measurement."
+        setMeasurement(
+            title = "Respiratory rate",
+            instructions = instructions,
+            state = MeasurementState.Success(16.0),
+            unit = "breaths/min"
+        )
+
+        composeRule.onNodeWithText(instructions).assertIsDisplayed()
+        composeRule.onNodeWithText("16 breaths/min").assertIsDisplayed()
+    }
+
+    @Test
+    fun respiratoryCollectionProcessesSamplesAndCleansUp() {
+        val sampleSource = FakeAccelerometerSampleSource(emitSamplesOnStart = true)
+        val processor = object : RespiratoryRateProcessor {
+            override suspend fun calculate(samples: List<AccelerometerSample>): Int {
+                assertEquals(12, samples.size)
+                return 16
+            }
+        }
+        setVitalsScreen(
+            sampleSource = sampleSource,
+            processor = processor,
+            collectionDurationMillis = 1L
+        )
+
+        composeRule.onNodeWithText("Start 45-second measurement")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) { sampleSource.stopCount == 1 }
+
+        composeRule.onNodeWithText("16 breaths/min").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(1, sampleSource.startCount)
+            assertEquals(1, sampleSource.stopCount)
+        }
+    }
+
+    @Test
+    fun cancellingRespiratoryCollectionStopsTheSensorAndAllowsRetry() {
+        val sampleSource = FakeAccelerometerSampleSource()
+        setVitalsScreen(
+            sampleSource = sampleSource,
+            processor = object : RespiratoryRateProcessor {
+                override suspend fun calculate(samples: List<AccelerometerSample>) = 16
+            },
+            collectionDurationMillis = 60_000L
+        )
+
+        composeRule.onNodeWithText("Start 45-second measurement")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Cancel")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) { sampleSource.stopCount == 1 }
+
+        composeRule.onNodeWithText("Start 45-second measurement")
+            .assertIsDisplayed()
+            .assertIsEnabled()
+    }
+
+    @Test
+    fun respiratoryRegistrationFailureCanBeRetried() {
+        val sampleSource = FakeAccelerometerSampleSource(
+            emitSamplesOnStart = true,
+            registrationSucceeds = false
+        )
+        setVitalsScreen(
+            sampleSource = sampleSource,
+            processor = object : RespiratoryRateProcessor {
+                override suspend fun calculate(samples: List<AccelerometerSample>) = 16
+            },
+            collectionDurationMillis = 1L
+        )
+
+        composeRule.onNodeWithText("Start 45-second measurement")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Accelerometer data collection couldn't start.")
+            .assertIsDisplayed()
+        composeRule.runOnIdle { sampleSource.registrationSucceeds = true }
+        composeRule.onNodeWithText("Retry")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) { sampleSource.stopCount == 1 }
+
+        composeRule.onNodeWithText("16 breaths/min").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(2, sampleSource.startCount) }
+    }
+
+    @Test
+    fun disposingVitalsCancelsCollectionAndStopsTheSensor() {
+        val sampleSource = FakeAccelerometerSampleSource()
+        var showVitals by mutableStateOf(true)
+        var respiratoryRateState by mutableStateOf<MeasurementState>(MeasurementState.Idle)
+        composeRule.setContent {
+            AssignmentAppTheme {
+                if (showVitals) {
+                    VitalsScreen(
+                        heartRateState = MeasurementState.Success(72.0),
+                        respiratoryRateState = respiratoryRateState,
+                        onHeartRateStateChange = { },
+                        onRespiratoryRateStateChange = { respiratoryRateState = it },
+                        onContinue = { },
+                        respiratorySampleSourceOverride = sampleSource,
+                        respiratoryRateProcessorOverride = object : RespiratoryRateProcessor {
+                            override suspend fun calculate(
+                                samples: List<AccelerometerSample>
+                            ) = 16
+                        },
+                        respiratoryCollectionDurationMillis = 60_000L
+                    )
+                } else {
+                    Text("Vitals closed")
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Start 45-second measurement")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) { sampleSource.startCount == 1 }
+        composeRule.runOnIdle { showVitals = false }
+        composeRule.waitUntil(timeoutMillis = 5_000L) { sampleSource.stopCount == 1 }
+
+        composeRule.onNodeWithText("Vitals closed").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(MeasurementState.Idle, respiratoryRateState)
+        }
+    }
+
+    @Test
+    fun continueToSymptomsIsDisabledUntilBothMeasurementsSucceed() {
+        setContinueButton(
+            heartRateState = MeasurementState.Success(72.0),
+            respiratoryRateState = MeasurementState.Idle
+        )
+
+        composeRule.onNodeWithText("Continue to symptoms").assertIsNotEnabled()
+    }
+
+    @Test
+    fun continueToSymptomsInvokesNavigationAfterBothMeasurementsSucceed() {
+        var navigationCalls = 0
+        setContinueButton(
+            heartRateState = MeasurementState.Success(72.0),
+            respiratoryRateState = MeasurementState.Success(16.0),
+            onContinue = { navigationCalls++ }
+        )
+
+        composeRule.onNodeWithText("Continue to symptoms")
+            .assertIsEnabled()
+            .performClick()
+
+        composeRule.runOnIdle { assertEquals(1, navigationCalls) }
+    }
+
+    @Test
+    fun navHostGatesSymptomsAndPreservesTheMeasuredSession() {
+        val viewModel = HealthViewModel()
+        composeRule.setContent {
+            AssignmentAppTheme {
+                AssignmentAppNavHost(healthViewModel = viewModel)
+            }
+        }
+        composeRule.onNodeWithText("Record health data").performClick()
+        composeRule.onNodeWithText("Continue to symptoms")
+            .performScrollTo()
+            .assertIsNotEnabled()
+
+        composeRule.runOnIdle {
+            viewModel.updateHeartRate(MeasurementState.Success(72.0))
+            viewModel.updateRespiratoryRate(MeasurementState.Success(16.0))
+        }
+        composeRule.onNodeWithText("Continue to symptoms")
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+
+        composeRule.onNodeWithText("How are you feeling?").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(72.0, viewModel.session.heartRate)
+            assertEquals(16.0, viewModel.session.respiratoryRate)
+        }
+    }
+
+    @Test
     fun retryAndCancellationPreserveRespiratoryResult() {
         val viewModel = HealthViewModel()
         val respiratoryResult = MeasurementState.Success(16.0)
@@ -144,20 +364,23 @@ class VitalsScreenTest {
     }
 
     private fun setMeasurement(
+        title: String = "Heart rate",
+        instructions: String = "Keep still during recording.",
         state: MeasurementState,
+        unit: String = "bpm",
         actionLabel: String? = null,
         actionEnabled: Boolean = true,
-        onRetry: () -> Unit = { },
+        onRetry: (() -> Unit)? = { },
         progress: Float? = null,
         onCancel: (() -> Unit)? = null
     ) {
         composeRule.setContent {
             AssignmentAppTheme {
                 MeasurementSection(
-                    title = "Heart rate",
-                    instructions = "Keep still during recording.",
+                    title = title,
+                    instructions = instructions,
                     state = state,
-                    unit = "bpm",
+                    unit = unit,
                     idleLabel = "Ready to record",
                     onRetry = onRetry,
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -168,6 +391,86 @@ class VitalsScreenTest {
                     onCancel = onCancel
                 )
             }
+        }
+    }
+
+    private fun setContinueButton(
+        heartRateState: MeasurementState,
+        respiratoryRateState: MeasurementState,
+        onContinue: () -> Unit = { }
+    ) {
+        composeRule.setContent {
+            AssignmentAppTheme {
+                ContinueToSymptomsButton(
+                    heartRateState = heartRateState,
+                    respiratoryRateState = respiratoryRateState,
+                    onContinue = onContinue
+                )
+            }
+        }
+    }
+
+    private fun setVitalsScreen(
+        sampleSource: AccelerometerSampleSource,
+        processor: RespiratoryRateProcessor,
+        collectionDurationMillis: Long
+    ) {
+        composeRule.setContent {
+            var respiratoryRateState by remember {
+                mutableStateOf<MeasurementState>(MeasurementState.Idle)
+            }
+            AssignmentAppTheme {
+                VitalsScreen(
+                    heartRateState = MeasurementState.Success(72.0),
+                    respiratoryRateState = respiratoryRateState,
+                    onHeartRateStateChange = { },
+                    onRespiratoryRateStateChange = { respiratoryRateState = it },
+                    onContinue = { },
+                    respiratorySampleSourceOverride = sampleSource,
+                    respiratoryRateProcessorOverride = processor,
+                    respiratoryCollectionDurationMillis = collectionDurationMillis
+                )
+            }
+        }
+    }
+}
+
+private class FakeAccelerometerSampleSource(
+    private val emitSamplesOnStart: Boolean = false,
+    var registrationSucceeds: Boolean = true
+) : AccelerometerSampleSource {
+    override val isAvailable = true
+    @Volatile
+    var startCount = 0
+        private set
+    @Volatile
+    var stopCount = 0
+        private set
+    private var listener: ((AccelerometerSample) -> Unit)? = null
+
+    override fun start(onSample: (AccelerometerSample) -> Unit): Boolean {
+        startCount++
+        if (!registrationSucceeds) return false
+        listener = onSample
+        if (emitSamplesOnStart) {
+            repeat(12) { index ->
+                onSample(
+                    AccelerometerSample(
+                        timestampNanos = index.toLong(),
+                        x = 0f,
+                        y = 0f,
+                        z = 10f
+                    )
+                )
+            }
+        }
+        return true
+    }
+
+    override fun stop() {
+        if (listener != null) {
+            stopCount++
+            listener = null
         }
     }
 }

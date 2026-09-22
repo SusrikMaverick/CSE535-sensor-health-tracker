@@ -39,6 +39,9 @@ class HealthViewModel : ViewModel() {
     }
 
     fun updateSymptomRating(symptom: Symptom, rating: Int) {
+        require(rating in 0..5) {
+            "Symptom ratings must be between 0 and 5."
+        }
         session = session.copy(
             symptomRatings = session.symptomRatings + (symptom to rating)
         )

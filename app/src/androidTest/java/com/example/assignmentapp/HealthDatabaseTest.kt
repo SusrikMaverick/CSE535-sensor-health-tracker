@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.example.assignmentapp.data.HealthDatabase
 import com.example.assignmentapp.data.HealthRecordDao
 import com.example.assignmentapp.data.HealthSession
+import com.example.assignmentapp.data.Symptom
 import com.example.assignmentapp.data.toEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -38,12 +39,15 @@ class HealthDatabaseTest {
     fun insertCountAndDeleteRecord() = runBlocking {
         val record = HealthSession(
             heartRate = 72.0,
-            respiratoryRate = 16.0
+            respiratoryRate = 16.0,
+            symptomRatings = Symptom.entries.associateWith { it.ordinal % 6 }
         ).toEntity(timestamp = 123L)
 
         assertEquals(0, dao.count())
-        assertTrue(dao.insert(record) > 0)
+        val insertedId = dao.insert(record)
+        assertTrue(insertedId > 0)
         assertEquals(1, dao.count())
+        assertEquals(record.copy(id = insertedId), dao.getAll().single())
         assertEquals(1, dao.deleteAll())
         assertEquals(0, dao.count())
     }

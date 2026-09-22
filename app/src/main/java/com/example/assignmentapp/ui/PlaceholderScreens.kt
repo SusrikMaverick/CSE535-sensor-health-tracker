@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -54,12 +55,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.assignmentapp.data.MeasurementState
+import com.example.assignmentapp.sensor.AccelerometerSampleSource
+import com.example.assignmentapp.sensor.AndroidAccelerometerSampleSource
+import com.example.assignmentapp.sensor.RESPIRATORY_COLLECTION_DURATION_MILLIS
+import com.example.assignmentapp.sensor.RespiratoryRateProcessor
+import com.example.assignmentapp.sensor.SampleRespiratoryRateProcessor
 import com.example.assignmentapp.sensor.VideoHeartRateProcessor
+import com.example.assignmentapp.sensor.canStartRespiratoryCollection
+import com.example.assignmentapp.sensor.collectRespiratorySamples
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -89,6 +101,19 @@ internal fun canStartHeartRateRecording(
 internal fun deleteTemporaryVideo(file: File?) {
     file?.delete()
 }
+
+internal fun respiratoryRateHardwareError(hasAccelerometer: Boolean): String? =
+    if (hasAccelerometer) {
+        null
+    } else {
+        "An accelerometer is not available on this device."
+    }
+
+internal fun canContinueToSymptoms(
+    heartRateState: MeasurementState,
+    respiratoryRateState: MeasurementState
+): Boolean = heartRateState is MeasurementState.Success &&
+    respiratoryRateState is MeasurementState.Success
 
 @Composable
 fun HomeScreen(
@@ -236,19 +261,30 @@ fun HomeScreen(
 }
 
 @Composable
-fun VitalsScreen(
+internal fun VitalsScreen(
     heartRateState: MeasurementState,
     respiratoryRateState: MeasurementState,
     onHeartRateStateChange: (MeasurementState) -> Unit,
-    onRespiratoryRetry: () -> Unit,
+    onRespiratoryRateStateChange: (MeasurementState) -> Unit,
     onContinue: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    respiratorySampleSourceOverride: AccelerometerSampleSource? = null,
+    respiratoryRateProcessorOverride: RespiratoryRateProcessor? = null,
+    respiratoryCollectionDurationMillis: Long = RESPIRATORY_COLLECTION_DURATION_MILLIS
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val coroutineScope = rememberCoroutineScope()
     val heartRateProcessor = remember(context) { VideoHeartRateProcessor(context) }
+    val defaultRespiratorySampleSource = remember(context) {
+        AndroidAccelerometerSampleSource(context)
+    }
+    val respiratorySampleSource =
+        respiratorySampleSourceOverride ?: defaultRespiratorySampleSource
+    val defaultRespiratoryRateProcessor = remember { SampleRespiratoryRateProcessor() }
+    val respiratoryRateProcessor =
+        respiratoryRateProcessorOverride ?: defaultRespiratoryRateProcessor
     val screenActive = remember { mutableStateOf(true) }
     val packageManager = context.packageManager
     @SuppressLint("UnsupportedChromeOsCameraSystemFeature")
@@ -280,6 +316,17 @@ fun VitalsScreen(
     var isPreparingCamera by remember { mutableStateOf(false) }
     var cancellationRequested by remember { mutableStateOf(false) }
     var recordingProgress by remember { mutableFloatStateOf(0f) }
+    var respiratoryCollectionJob by remember { mutableStateOf<Job?>(null) }
+    var respiratoryProgress by remember { mutableFloatStateOf(0f) }
+    val accelerometerError = respiratoryRateHardwareError(
+        respiratorySampleSource.isAvailable
+    )
+
+    LaunchedEffect(accelerometerError, respiratoryRateState) {
+        if (accelerometerError != null && respiratoryRateState is MeasurementState.Idle) {
+            onRespiratoryRateStateChange(MeasurementState.Error(accelerometerError))
+        }
+    }
 
     fun prepareHeartRateCamera() {
         when {
@@ -468,10 +515,92 @@ fun VitalsScreen(
         }
     }
 
-    DisposableEffect(Unit) {
+    fun startRespiratoryRateCollection() {
+        if (!canStartRespiratoryCollection(respiratoryCollectionJob != null)) {
+            return
+        }
+        if (accelerometerError != null) {
+            onRespiratoryRateStateChange(MeasurementState.Error(accelerometerError))
+            return
+        }
+
+        respiratoryProgress = 0f
+        onRespiratoryRateStateChange(MeasurementState.Collecting)
+        lateinit var collectionJob: Job
+        collectionJob = coroutineScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val samples = collectRespiratorySamples(
+                    sampleSource = respiratorySampleSource,
+                    collectionDurationMillis = respiratoryCollectionDurationMillis,
+                    onProgress = { progress ->
+                        if (screenActive.value) {
+                            respiratoryProgress = progress
+                        }
+                    }
+                )
+                if (!screenActive.value) return@launch
+
+                onRespiratoryRateStateChange(MeasurementState.Processing)
+                val breathsPerMinute = respiratoryRateProcessor.calculate(samples)
+                if (screenActive.value) {
+                    onRespiratoryRateStateChange(
+                        MeasurementState.Success(breathsPerMinute.toDouble())
+                    )
+                }
+            } catch (error: CancellationException) {
+                if (screenActive.value) {
+                    respiratoryProgress = 0f
+                    onRespiratoryRateStateChange(MeasurementState.Idle)
+                }
+                throw error
+            } catch (error: Exception) {
+                if (screenActive.value) {
+                    respiratoryProgress = 0f
+                    onRespiratoryRateStateChange(
+                        MeasurementState.Error(
+                            error.message ?: "Respiratory-rate measurement failed."
+                        )
+                    )
+                }
+            } finally {
+                if (respiratoryCollectionJob === collectionJob) {
+                    respiratoryCollectionJob = null
+                }
+            }
+        }
+        respiratoryCollectionJob = collectionJob
+        collectionJob.start()
+    }
+
+    fun cancelRespiratoryRateCollection() {
+        respiratoryCollectionJob?.cancel()
+    }
+
+    DisposableEffect(lifecycleOwner, respiratorySampleSource) {
+        screenActive.value = true
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                val activeRespiratoryCollection = respiratoryCollectionJob
+                if (activeRespiratoryCollection != null) {
+                    activeRespiratoryCollection.cancel()
+                    respiratorySampleSource.stop()
+                    respiratoryProgress = 0f
+                    onRespiratoryRateStateChange(MeasurementState.Idle)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+
         onDispose {
             screenActive.value = false
+            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
             releaseHeartRateResources(deleteVideo = true)
+            val activeRespiratoryCollection = respiratoryCollectionJob
+            activeRespiratoryCollection?.cancel()
+            respiratorySampleSource.stop()
+            if (activeRespiratoryCollection != null) {
+                onRespiratoryRateStateChange(MeasurementState.Idle)
+            }
         }
     }
 
@@ -531,28 +660,55 @@ fun VitalsScreen(
 
             MeasurementSection(
                 title = "Respiratory rate",
-                instructions = "Uses the phone's motion sensor to estimate breaths per minute.",
+                instructions = "Lie down and place the phone flat on your chest. Keep still and breathe normally during the 45-second measurement.",
                 state = respiratoryRateState,
                 unit = "breaths/min",
-                idleLabel = "Not measured",
-                onRetry = onRespiratoryRetry,
+                idleLabel = if (accelerometerError == null) {
+                    "Ready to measure"
+                } else {
+                    "Motion sensor unavailable"
+                },
+                actionLabel = "Start 45-second measurement",
+                actionEnabled = canStartRespiratoryCollection(
+                    respiratoryCollectionJob != null
+                ),
+                onAction = ::startRespiratoryRateCollection,
+                onRetry = if (accelerometerError == null) {
+                    ::startRespiratoryRateCollection
+                } else {
+                    null
+                },
+                progress = respiratoryProgress,
+                onCancel = ::cancelRespiratoryRateCollection,
                 containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer
             )
 
-            OutlinedButton(
-                onClick = onContinue,
-                enabled = activeRecording == null &&
-                    !isPreparingCamera &&
-                    heartRateState !is MeasurementState.Processing,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 56.dp),
-                shape = MaterialTheme.shapes.extraLarge
-            ) {
-                Text("Continue to symptoms")
-            }
+            ContinueToSymptomsButton(
+                heartRateState = heartRateState,
+                respiratoryRateState = respiratoryRateState,
+                onContinue = onContinue
+            )
         }
+    }
+}
+
+@Composable
+internal fun ContinueToSymptomsButton(
+    heartRateState: MeasurementState,
+    respiratoryRateState: MeasurementState,
+    onContinue: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedButton(
+        onClick = onContinue,
+        enabled = canContinueToSymptoms(heartRateState, respiratoryRateState),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
+        shape = MaterialTheme.shapes.extraLarge
+    ) {
+        Text("Continue to symptoms")
     }
 }
 
@@ -563,7 +719,7 @@ internal fun MeasurementSection(
     state: MeasurementState,
     unit: String,
     idleLabel: String,
-    onRetry: () -> Unit,
+    onRetry: (() -> Unit)?,
     containerColor: Color,
     contentColor: Color,
     actionLabel: String? = null,
@@ -655,71 +811,15 @@ internal fun MeasurementSection(
                         style = MaterialTheme.typography.bodyLarge,
                         color = contentColor
                     )
-                    OutlinedButton(
-                        onClick = onRetry,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = contentColor
-                        )
-                    ) {
-                        Text("Retry")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SymptomsScreen(
-    onContinue: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    PlaceholderScreen(
-        title = "Symptoms",
-        description = "Symptom ratings and local saving will appear here.",
-        actionLabel = "Return home",
-        onAction = onContinue,
-        modifier = modifier
-    )
-}
-
-@Composable
-private fun PlaceholderScreen(
-    title: String,
-    description: String,
-    actionLabel: String,
-    onAction: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = description,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(onClick = onAction) {
-                        Text(actionLabel)
+                    onRetry?.let { retry ->
+                        OutlinedButton(
+                            onClick = retry,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = contentColor
+                            )
+                        ) {
+                            Text("Retry")
+                        }
                     }
                 }
             }

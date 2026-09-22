@@ -16,6 +16,9 @@ interface HealthRecordDao {
     @Query("SELECT COUNT(*) FROM health_records")
     suspend fun count(): Int
 
+    @Query("SELECT * FROM health_records ORDER BY id ASC")
+    suspend fun getAll(): List<HealthRecordEntity>
+
     @Query("DELETE FROM health_records")
     suspend fun deleteAll(): Int
 }
