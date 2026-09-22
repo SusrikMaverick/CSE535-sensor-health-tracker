@@ -16,6 +16,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.assignmentapp.data.HealthDatabase
+import com.example.assignmentapp.data.MeasurementState
 import com.example.assignmentapp.ui.HealthViewModel
 import com.example.assignmentapp.ui.HomeScreen
 import com.example.assignmentapp.ui.SymptomsScreen
@@ -63,7 +64,15 @@ private fun AssignmentAppNavHost() {
                 )
             }
             composable(VitalsRoute) {
-                VitalsScreen(onContinue = { navController.navigate(SymptomsRoute) })
+                VitalsScreen(
+                    heartRateState = healthViewModel.heartRateState,
+                    respiratoryRateState = healthViewModel.respiratoryRateState,
+                    onHeartRateStateChange = healthViewModel::updateHeartRate,
+                    onRespiratoryRetry = {
+                        healthViewModel.updateRespiratoryRate(MeasurementState.Idle)
+                    },
+                    onContinue = { navController.navigate(SymptomsRoute) }
+                )
             }
             composable(SymptomsRoute) {
                 SymptomsScreen(
