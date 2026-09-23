@@ -2,6 +2,7 @@ package com.example.assignmentapp
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -10,11 +11,16 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.assignmentapp.data.MeasurementState
 import com.example.assignmentapp.sensor.AccelerometerSample
 import com.example.assignmentapp.sensor.AccelerometerSampleSource
@@ -76,6 +82,8 @@ class VitalsScreenTest {
         )
 
         composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.onNodeWithContentDescription("Heart rate collection progress")
+            .assertIsDisplayed()
 
         composeRule.runOnIdle { assertEquals(1, cancellationCalls) }
     }
@@ -113,7 +121,10 @@ class VitalsScreenTest {
     fun processingStateShowsProgress() {
         setMeasurement(state = MeasurementState.Processing)
 
-        composeRule.onNodeWithText("Processing").assertIsDisplayed()
+        composeRule.onNodeWithText("Calculating estimate — keep this screen open.")
+            .assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Heart rate processing progress")
+            .assertIsDisplayed()
     }
 
     @Test
@@ -162,6 +173,8 @@ class VitalsScreenTest {
             collectionDurationMillis = 1L
         )
 
+        composeRule.onNodeWithText("Coursework estimates only — not medical advice.")
+            .assertIsDisplayed()
         composeRule.onNodeWithText("Start 45-second measurement")
             .performScrollTo()
             .performClick()
@@ -231,14 +244,15 @@ class VitalsScreenTest {
     fun disposingVitalsCancelsCollectionAndStopsTheSensor() {
         val sampleSource = FakeAccelerometerSampleSource()
         var showVitals by mutableStateOf(true)
+        var heartRateState by mutableStateOf<MeasurementState>(MeasurementState.Processing)
         var respiratoryRateState by mutableStateOf<MeasurementState>(MeasurementState.Idle)
         composeRule.setContent {
             AssignmentAppTheme {
                 if (showVitals) {
                     VitalsScreen(
-                        heartRateState = MeasurementState.Success(72.0),
+                        heartRateState = heartRateState,
                         respiratoryRateState = respiratoryRateState,
-                        onHeartRateStateChange = { },
+                        onHeartRateStateChange = { heartRateState = it },
                         onRespiratoryRateStateChange = { respiratoryRateState = it },
                         onContinue = { },
                         respiratorySampleSourceOverride = sampleSource,
@@ -264,7 +278,44 @@ class VitalsScreenTest {
 
         composeRule.onNodeWithText("Vitals closed").assertIsDisplayed()
         composeRule.runOnIdle {
+            assertEquals(MeasurementState.Idle, heartRateState)
             assertEquals(MeasurementState.Idle, respiratoryRateState)
+        }
+    }
+
+    @Test
+    fun backgroundingResetsInterruptedHeartMeasurementAndPreservesCompletedResult() {
+        val lifecycleOwner = TestLifecycleOwner()
+        var heartRateState by mutableStateOf<MeasurementState>(MeasurementState.Processing)
+        var respiratoryRateState by mutableStateOf<MeasurementState>(
+            MeasurementState.Success(16.0)
+        )
+        composeRule.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+                AssignmentAppTheme {
+                    VitalsScreen(
+                        heartRateState = heartRateState,
+                        respiratoryRateState = respiratoryRateState,
+                        onHeartRateStateChange = { heartRateState = it },
+                        onRespiratoryRateStateChange = { respiratoryRateState = it },
+                        onContinue = { },
+                        respiratorySampleSourceOverride = FakeAccelerometerSampleSource()
+                    )
+                }
+            }
+        }
+
+        composeRule.runOnIdle {
+            lifecycleOwner.handle(Lifecycle.Event.ON_CREATE)
+            lifecycleOwner.handle(Lifecycle.Event.ON_START)
+            lifecycleOwner.handle(Lifecycle.Event.ON_RESUME)
+            lifecycleOwner.handle(Lifecycle.Event.ON_PAUSE)
+            lifecycleOwner.handle(Lifecycle.Event.ON_STOP)
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(MeasurementState.Idle, heartRateState)
+            assertEquals(MeasurementState.Success(16.0), respiratoryRateState)
         }
     }
 
@@ -472,5 +523,15 @@ private class FakeAccelerometerSampleSource(
             stopCount++
             listener = null
         }
+    }
+}
+
+private class TestLifecycleOwner : LifecycleOwner {
+    private val registry = LifecycleRegistry(this)
+
+    override val lifecycle: Lifecycle = registry
+
+    fun handle(event: Lifecycle.Event) {
+        registry.handleLifecycleEvent(event)
     }
 }

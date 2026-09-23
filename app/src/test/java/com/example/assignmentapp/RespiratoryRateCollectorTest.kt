@@ -5,7 +5,6 @@ import com.example.assignmentapp.sensor.AccelerometerSample
 import com.example.assignmentapp.sensor.AccelerometerSampleSource
 import com.example.assignmentapp.sensor.AccelerometerUnavailableException
 import com.example.assignmentapp.sensor.RESPIRATORY_COLLECTION_DURATION_MILLIS
-import com.example.assignmentapp.sensor.canStartRespiratoryCollection
 import com.example.assignmentapp.sensor.collectRespiratorySamples
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -13,7 +12,6 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -113,12 +111,6 @@ class RespiratoryRateCollectorTest {
         assertEquals(1, source.startCount)
         assertEquals(1, source.stopCount)
         assertNull(source.listener)
-    }
-
-    @Test
-    fun duplicateStartGuardAllowsOnlyInactiveCollection() {
-        assertTrue(canStartRespiratoryCollection(hasActiveCollection = false))
-        assertFalse(canStartRespiratoryCollection(hasActiveCollection = true))
     }
 }
 

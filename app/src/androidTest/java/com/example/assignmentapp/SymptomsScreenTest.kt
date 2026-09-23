@@ -3,7 +3,6 @@ package com.example.assignmentapp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -11,7 +10,6 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertValueEquals
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -19,9 +17,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.assignmentapp.data.HealthSession
+import com.example.assignmentapp.data.SessionSaveStatus
 import com.example.assignmentapp.data.Symptom
 import com.example.assignmentapp.ui.SymptomsContent
-import com.example.assignmentapp.ui.SymptomsSaveState
 import com.example.assignmentapp.ui.theme.AssignmentAppTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -39,6 +37,8 @@ class SymptomsScreenTest {
 
         composeRule.onNodeWithText("72 bpm").assertIsDisplayed()
         composeRule.onNodeWithText("16 breaths/min").assertIsDisplayed()
+        composeRule.onNodeWithText("Coursework estimates only — not medical advice.")
+            .assertIsDisplayed()
         composeRule
             .onNodeWithContentDescription("Heart rate, 72 beats per minute, read only")
             .assertContentDescriptionEquals("Heart rate, 72 beats per minute, read only")
@@ -67,8 +67,6 @@ class SymptomsScreenTest {
             composeRule.onNodeWithTag("${symptom.name.lowercase()}_rating_0")
                 .assertIsSelected()
         }
-        composeRule.onAllNodesWithText("Selected rating: 0 out of 5")
-            .assertCountEquals(Symptom.entries.size)
     }
 
     @Test
@@ -78,7 +76,7 @@ class SymptomsScreenTest {
             AssignmentAppTheme {
                 SymptomsContent(
                     session = session,
-                    saveState = SymptomsSaveState.Idle,
+                    saveState = SessionSaveStatus.Ready,
                     onRatingChange = { symptom, rating ->
                         session = session.copy(
                             symptomRatings = session.symptomRatings + (symptom to rating)
@@ -95,7 +93,7 @@ class SymptomsScreenTest {
             .performClick()
             .assertIsSelected()
             .assertValueEquals("Selected")
-        composeRule.onNodeWithText("Selected rating: 5 out of 5")
+        composeRule.onNodeWithText("5 / 5")
             .assertIsDisplayed()
     }
 
@@ -106,7 +104,7 @@ class SymptomsScreenTest {
             AssignmentAppTheme {
                 SymptomsContent(
                     session = session,
-                    saveState = SymptomsSaveState.Idle,
+                    saveState = SessionSaveStatus.Ready,
                     onRatingChange = { symptom, rating ->
                         session = session.copy(
                             symptomRatings = session.symptomRatings + (symptom to rating)
@@ -126,8 +124,6 @@ class SymptomsScreenTest {
             composeRule.onNodeWithTag("${symptom.name.lowercase()}_rating_0")
                 .assertIsSelected()
         }
-        composeRule.onAllNodesWithText("Selected rating: 0 out of 5")
-            .assertCountEquals(Symptom.entries.size - 1)
     }
 
     @Test
@@ -157,7 +153,7 @@ class SymptomsScreenTest {
 
     @Test
     fun savingDisablesUploadAndRatingControls() {
-        setSymptomsContent(saveState = SymptomsSaveState.Saving)
+        setSymptomsContent(saveState = SessionSaveStatus.Saving)
 
         composeRule.onNodeWithTag("nausea_rating_0")
             .performScrollTo()
@@ -178,7 +174,7 @@ class SymptomsScreenTest {
         )
         setSymptomsContent(
             session = session,
-            saveState = SymptomsSaveState.Error("The record could not be stored."),
+            saveState = SessionSaveStatus.Error("The record could not be stored."),
             onRetry = { retryCalls++ }
         )
 
@@ -187,7 +183,7 @@ class SymptomsScreenTest {
         composeRule.onNodeWithTag("nausea_rating_4")
             .performScrollTo()
             .assertIsSelected()
-        composeRule.onNodeWithText("Selected rating: 4 out of 5")
+        composeRule.onNodeWithText("4 / 5")
             .assertIsDisplayed()
         composeRule.onNodeWithText("The record could not be stored.")
             .performScrollTo()
@@ -201,7 +197,7 @@ class SymptomsScreenTest {
 
     @Test
     fun successShowsFeedbackAndPreventsAnotherUpload() {
-        setSymptomsContent(saveState = SymptomsSaveState.Success)
+        setSymptomsContent(saveState = SessionSaveStatus.Saved(1L))
 
         composeRule.onNodeWithText("Check-in saved")
             .performScrollTo()
@@ -214,7 +210,7 @@ class SymptomsScreenTest {
 
     private fun setSymptomsContent(
         session: HealthSession = completeSession(),
-        saveState: SymptomsSaveState = SymptomsSaveState.Idle,
+        saveState: SessionSaveStatus = SessionSaveStatus.Ready,
         onUpload: () -> Unit = { },
         onRetry: () -> Unit = { }
     ) {

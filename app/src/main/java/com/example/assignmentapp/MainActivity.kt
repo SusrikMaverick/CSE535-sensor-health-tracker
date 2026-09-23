@@ -27,7 +27,6 @@ import com.example.assignmentapp.data.SessionSaveStatus
 import com.example.assignmentapp.ui.HealthViewModel
 import com.example.assignmentapp.ui.HomeScreen
 import com.example.assignmentapp.ui.SymptomsContent
-import com.example.assignmentapp.ui.SymptomsSaveState
 import com.example.assignmentapp.ui.VitalsScreen
 import com.example.assignmentapp.ui.theme.AssignmentAppTheme
 import kotlinx.coroutines.delay
@@ -123,7 +122,7 @@ internal fun AssignmentAppNavHost(
 
                 SymptomsContent(
                     session = healthViewModel.session,
-                    saveState = saveStatus.toSymptomsSaveState(),
+                    saveState = saveStatus,
                     onRatingChange = healthViewModel::updateSymptomRating,
                     onUpload = ::saveCurrentSession,
                     onRetry = ::saveCurrentSession
@@ -131,11 +130,4 @@ internal fun AssignmentAppNavHost(
             }
         }
     }
-}
-
-private fun SessionSaveStatus.toSymptomsSaveState(): SymptomsSaveState = when (this) {
-    SessionSaveStatus.Ready -> SymptomsSaveState.Idle
-    SessionSaveStatus.Saving -> SymptomsSaveState.Saving
-    is SessionSaveStatus.Saved -> SymptomsSaveState.Success
-    is SessionSaveStatus.Error -> SymptomsSaveState.Error(message)
 }

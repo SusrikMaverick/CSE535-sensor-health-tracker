@@ -39,16 +39,9 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.unit.dp
 import com.example.assignmentapp.data.HealthSession
+import com.example.assignmentapp.data.SessionSaveStatus
 import com.example.assignmentapp.data.Symptom
 import kotlin.math.roundToInt
-
-/** The persistence state rendered by [SymptomsContent]. */
-sealed interface SymptomsSaveState {
-    data object Idle : SymptomsSaveState
-    data object Saving : SymptomsSaveState
-    data object Success : SymptomsSaveState
-    data class Error(val message: String) : SymptomsSaveState
-}
 
 /**
  * Activity 2 content for rating symptoms and saving the current health session.
@@ -59,14 +52,14 @@ sealed interface SymptomsSaveState {
 @Composable
 fun SymptomsContent(
     session: HealthSession,
-    saveState: SymptomsSaveState,
+    saveState: SessionSaveStatus,
     onRatingChange: (Symptom, Int) -> Unit,
     onUpload: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val inputsEnabled = saveState !is SymptomsSaveState.Saving &&
-        saveState !is SymptomsSaveState.Success
+    val inputsEnabled = saveState !is SessionSaveStatus.Saving &&
+        saveState !is SessionSaveStatus.Saved
     val hasCompleteVitals = session.heartRate != null && session.respiratoryRate != null
 
     Surface(
@@ -141,10 +134,10 @@ fun SymptomsContent(
                     .fillMaxWidth()
                     .heightIn(min = 56.dp)
                     .semantics { testTag = "upload_symptoms" },
-                enabled = saveState is SymptomsSaveState.Idle && hasCompleteVitals,
+                enabled = saveState is SessionSaveStatus.Ready && hasCompleteVitals,
                 shape = MaterialTheme.shapes.large
             ) {
-                if (saveState is SymptomsSaveState.Saving) {
+                if (saveState is SessionSaveStatus.Saving) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         color = MaterialTheme.colorScheme.onPrimary,
@@ -153,10 +146,10 @@ fun SymptomsContent(
                 }
                 Text(
                     text = when (saveState) {
-                        SymptomsSaveState.Idle -> "Upload symptoms"
-                        SymptomsSaveState.Saving -> "Saving…"
-                        SymptomsSaveState.Success -> "Symptoms uploaded"
-                        is SymptomsSaveState.Error -> "Upload symptoms"
+                        SessionSaveStatus.Ready -> "Upload symptoms"
+                        SessionSaveStatus.Saving -> "Saving…"
+                        is SessionSaveStatus.Saved -> "Symptoms uploaded"
+                        is SessionSaveStatus.Error -> "Upload symptoms"
                     },
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
@@ -184,6 +177,11 @@ private fun VitalsSummary(
             Text(
                 text = "Your measurements",
                 style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Text(
+                text = "Coursework estimates only — not medical advice.",
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
             Row(
@@ -303,11 +301,6 @@ private fun SymptomRatingCard(
                 onRatingChange = onRatingChange
             )
 
-            Text(
-                text = "Selected rating: $rating out of 5",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -439,14 +432,14 @@ private fun RatingChoice(
 
 @Composable
 private fun SaveFeedback(
-    saveState: SymptomsSaveState,
+    saveState: SessionSaveStatus,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (saveState) {
-        SymptomsSaveState.Idle -> Unit
+        SessionSaveStatus.Ready -> Unit
 
-        SymptomsSaveState.Saving -> {
+        SessionSaveStatus.Saving -> {
             ElevatedCard(
                 modifier = modifier
                     .fillMaxWidth()
@@ -475,7 +468,7 @@ private fun SaveFeedback(
             }
         }
 
-        SymptomsSaveState.Success -> {
+        is SessionSaveStatus.Saved -> {
             ElevatedCard(
                 modifier = modifier
                     .fillMaxWidth()
@@ -503,7 +496,7 @@ private fun SaveFeedback(
             }
         }
 
-        is SymptomsSaveState.Error -> {
+        is SessionSaveStatus.Error -> {
             ElevatedCard(
                 modifier = modifier
                     .fillMaxWidth()

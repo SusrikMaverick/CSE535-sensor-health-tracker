@@ -1,10 +1,21 @@
 package com.example.assignmentapp
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.assignmentapp.ui.HomeScreen
 import com.example.assignmentapp.ui.theme.AssignmentAppTheme
@@ -70,6 +81,38 @@ class HomeDeletionTest {
         confirmDeletion()
 
         composeRule.onNodeWithText("Recorded data couldn't be deleted. Try again.")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun compactAndLandscapeLargeTextLayoutsKeepBottomActionReachable() {
+        var landscape by mutableStateOf(false)
+        composeRule.setContent {
+            AssignmentAppTheme {
+                CompositionLocalProvider(
+                    LocalDensity provides Density(density = 1f, fontScale = 2f)
+                ) {
+                    Box(
+                        modifier = Modifier.size(
+                            width = if (landscape) 600.dp else 320.dp,
+                            height = if (landscape) 320.dp else 400.dp
+                        )
+                    ) {
+                        HomeScreen(
+                            onRecordHealthData = { },
+                            onDeleteAllDataConfirmed = { 0 }
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Delete all recorded data")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.runOnIdle { landscape = true }
+        composeRule.onNodeWithText("Delete all recorded data")
+            .performScrollTo()
             .assertIsDisplayed()
     }
 

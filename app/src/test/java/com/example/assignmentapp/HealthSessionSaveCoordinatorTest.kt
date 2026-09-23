@@ -3,7 +3,6 @@ package com.example.assignmentapp
 import com.example.assignmentapp.data.HealthRecordEntity
 import com.example.assignmentapp.data.HealthSession
 import com.example.assignmentapp.data.HealthSessionSaveCoordinator
-import com.example.assignmentapp.data.SessionSaveOutcome
 import com.example.assignmentapp.data.SessionSaveStatus
 import com.example.assignmentapp.data.Symptom
 import com.example.assignmentapp.data.toSession
@@ -27,9 +26,8 @@ class HealthSessionSaveCoordinatorTest {
             timestampProvider = { 123L }
         )
 
-        val outcome = coordinator.save(session)
+        coordinator.save(session)
 
-        assertEquals(SessionSaveOutcome.Saved(37L), outcome)
         assertEquals(SessionSaveStatus.Saved(37L), coordinator.status.value)
         assertEquals(1, insertedRecords.size)
         assertEquals(123L, insertedRecords.single().timestamp)
@@ -46,11 +44,9 @@ class HealthSessionSaveCoordinatorTest {
             }
         )
 
-        val first = coordinator.save(completeSession())
-        val repeated = coordinator.save(completeSession())
+        coordinator.save(completeSession())
+        coordinator.save(completeSession())
 
-        assertEquals(SessionSaveOutcome.Saved(9L), first)
-        assertEquals(SessionSaveOutcome.AlreadySaved(9L), repeated)
         assertEquals(1, insertCalls)
         assertEquals(SessionSaveStatus.Saved(9L), coordinator.status.value)
     }
@@ -73,14 +69,12 @@ class HealthSessionSaveCoordinatorTest {
         insertStarted.await()
 
         assertEquals(SessionSaveStatus.Saving, coordinator.status.value)
-        assertEquals(
-            SessionSaveOutcome.AlreadySaving,
-            coordinator.save(completeSession())
-        )
+        coordinator.save(completeSession())
         assertEquals(1, insertCalls)
 
         finishInsert.complete(Unit)
-        assertEquals(SessionSaveOutcome.Saved(14L), first.await())
+        first.await()
+        assertEquals(SessionSaveStatus.Saved(14L), coordinator.status.value)
         assertEquals(1, insertCalls)
     }
 
@@ -100,17 +94,15 @@ class HealthSessionSaveCoordinatorTest {
             }
         )
 
-        val failed = coordinator.save(session)
+        coordinator.save(session)
 
-        assertTrue(failed is SessionSaveOutcome.Failed)
         assertTrue(coordinator.status.value is SessionSaveStatus.Error)
         assertEquals(originalSession, session)
         assertEquals(1, insertCalls)
 
         shouldFail = false
-        val retried = coordinator.save(session)
+        coordinator.save(session)
 
-        assertEquals(SessionSaveOutcome.Saved(22L), retried)
         assertEquals(SessionSaveStatus.Saved(22L), coordinator.status.value)
         assertEquals(2, insertCalls)
         assertEquals(originalSession, insertedRecords.single().toSession())
@@ -126,15 +118,14 @@ class HealthSessionSaveCoordinatorTest {
             }
         )
 
-        val failed = coordinator.save(HealthSession())
+        coordinator.save(HealthSession())
 
-        assertTrue(failed is SessionSaveOutcome.Failed)
         assertTrue(coordinator.status.value is SessionSaveStatus.Error)
         assertEquals(0, insertCalls)
 
-        val retried = coordinator.save(completeSession())
+        coordinator.save(completeSession())
 
-        assertEquals(SessionSaveOutcome.Saved(5L), retried)
+        assertEquals(SessionSaveStatus.Saved(5L), coordinator.status.value)
         assertEquals(1, insertCalls)
     }
 

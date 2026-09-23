@@ -162,6 +162,3 @@ suspend fun collectRespiratorySamples(
 
     return synchronized(sampleLock) { samples.toList() }
 }
-
-fun canStartRespiratoryCollection(hasActiveCollection: Boolean): Boolean =
-    !hasActiveCollection

@@ -16,13 +16,6 @@ sealed interface SessionSaveStatus {
     data class Error(val message: String) : SessionSaveStatus
 }
 
-sealed interface SessionSaveOutcome {
-    data class Saved(val recordId: Long) : SessionSaveOutcome
-    data class Failed(val message: String) : SessionSaveOutcome
-    data object AlreadySaving : SessionSaveOutcome
-    data class AlreadySaved(val recordId: Long) : SessionSaveOutcome
-}
-
 /**
  * Coordinates a single Room insert for one health-session flow.
  *
@@ -40,27 +33,22 @@ class HealthSessionSaveCoordinator(
 
     val status: StateFlow<SessionSaveStatus> = _status.asStateFlow()
 
-    suspend fun save(session: HealthSession): SessionSaveOutcome {
-        if (!saveMutex.tryLock()) return SessionSaveOutcome.AlreadySaving
+    suspend fun save(session: HealthSession) {
+        if (!saveMutex.tryLock()) return
 
         try {
-            val savedStatus = _status.value as? SessionSaveStatus.Saved
-            if (savedStatus != null) {
-                return SessionSaveOutcome.AlreadySaved(savedStatus.recordId)
-            }
+            if (_status.value is SessionSaveStatus.Saved) return
 
             _status.value = SessionSaveStatus.Saving
 
-            return try {
+            try {
                 val recordId = insertRecord(session.toEntity(timestampProvider()))
                 _status.value = SessionSaveStatus.Saved(recordId)
-                SessionSaveOutcome.Saved(recordId)
             } catch (cancellation: CancellationException) {
                 _status.value = SessionSaveStatus.Ready
                 throw cancellation
             } catch (_: Exception) {
                 _status.value = SessionSaveStatus.Error(DEFAULT_SAVE_ERROR_MESSAGE)
-                SessionSaveOutcome.Failed(DEFAULT_SAVE_ERROR_MESSAGE)
             }
         } finally {
             saveMutex.unlock()

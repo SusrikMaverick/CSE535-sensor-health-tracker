@@ -47,12 +47,18 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -65,7 +71,6 @@ import com.example.assignmentapp.sensor.RESPIRATORY_COLLECTION_DURATION_MILLIS
 import com.example.assignmentapp.sensor.RespiratoryRateProcessor
 import com.example.assignmentapp.sensor.SampleRespiratoryRateProcessor
 import com.example.assignmentapp.sensor.VideoHeartRateProcessor
-import com.example.assignmentapp.sensor.canStartRespiratoryCollection
 import com.example.assignmentapp.sensor.collectRespiratorySamples
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -133,6 +138,7 @@ fun HomeScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp, vertical = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
@@ -176,7 +182,7 @@ fun HomeScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.heightIn(min = 24.dp))
 
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
@@ -286,6 +292,7 @@ internal fun VitalsScreen(
     val respiratoryRateProcessor =
         respiratoryRateProcessorOverride ?: defaultRespiratoryRateProcessor
     val screenActive = remember { mutableStateOf(true) }
+    val currentHeartRateState by rememberUpdatedState(heartRateState)
     val packageManager = context.packageManager
     @SuppressLint("UnsupportedChromeOsCameraSystemFeature")
     val hasRearCamera = remember(packageManager) {
@@ -316,6 +323,7 @@ internal fun VitalsScreen(
     var isPreparingCamera by remember { mutableStateOf(false) }
     var cancellationRequested by remember { mutableStateOf(false) }
     var recordingProgress by remember { mutableFloatStateOf(0f) }
+    var heartRateJob by remember { mutableStateOf<Job?>(null) }
     var respiratoryCollectionJob by remember { mutableStateOf<Job?>(null) }
     var respiratoryProgress by remember { mutableFloatStateOf(0f) }
     val accelerometerError = respiratoryRateHardwareError(
@@ -366,7 +374,7 @@ internal fun VitalsScreen(
         cancellationRequested = false
         recordingProgress = 0f
 
-        coroutineScope.launch {
+        heartRateJob = coroutineScope.launch {
             try {
                 val cameraProvider = ProcessCameraProvider.awaitInstance(context)
                 boundCameraProvider = cameraProvider
@@ -421,7 +429,9 @@ internal fun VitalsScreen(
 
                         when (event) {
                             is VideoRecordEvent.Start -> {
-                                onHeartRateStateChange(MeasurementState.Collecting)
+                                if (screenActive.value) {
+                                    onHeartRateStateChange(MeasurementState.Collecting)
+                                }
                             }
 
                             is VideoRecordEvent.Finalize -> {
@@ -446,7 +456,7 @@ internal fun VitalsScreen(
                                             .ERROR_DURATION_LIMIT_REACHED -> {
                                         recordingProgress = 1f
                                         onHeartRateStateChange(MeasurementState.Processing)
-                                        coroutineScope.launch {
+                                        heartRateJob = coroutineScope.launch {
                                             try {
                                                 val beatsPerMinute = heartRateProcessor.calculate(
                                                     Uri.fromFile(outputFile)
@@ -516,7 +526,7 @@ internal fun VitalsScreen(
     }
 
     fun startRespiratoryRateCollection() {
-        if (!canStartRespiratoryCollection(respiratoryCollectionJob != null)) {
+        if (respiratoryCollectionJob != null) {
             return
         }
         if (accelerometerError != null) {
@@ -576,17 +586,42 @@ internal fun VitalsScreen(
         respiratoryCollectionJob?.cancel()
     }
 
+    fun interruptHeartRateMeasurement() {
+        val wasActive = isPreparingCamera ||
+            activeRecording != null ||
+            heartRateJob?.isActive == true ||
+            currentHeartRateState is MeasurementState.Collecting ||
+            currentHeartRateState is MeasurementState.Processing
+        if (wasActive) {
+            cancellationRequested = true
+        }
+        heartRateJob?.cancel()
+        heartRateJob = null
+        releaseHeartRateResources(deleteVideo = true)
+        recordingProgress = 0f
+        if (wasActive) {
+            onHeartRateStateChange(MeasurementState.Idle)
+        }
+    }
+
     DisposableEffect(lifecycleOwner, respiratorySampleSource) {
         screenActive.value = true
         val lifecycleObserver = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                val activeRespiratoryCollection = respiratoryCollectionJob
-                if (activeRespiratoryCollection != null) {
-                    activeRespiratoryCollection.cancel()
-                    respiratorySampleSource.stop()
-                    respiratoryProgress = 0f
-                    onRespiratoryRateStateChange(MeasurementState.Idle)
+            when (event) {
+                Lifecycle.Event.ON_START -> screenActive.value = true
+                Lifecycle.Event.ON_STOP -> {
+                    screenActive.value = false
+                    interruptHeartRateMeasurement()
+                    val activeRespiratoryCollection = respiratoryCollectionJob
+                    if (activeRespiratoryCollection != null) {
+                        activeRespiratoryCollection.cancel()
+                        respiratorySampleSource.stop()
+                        respiratoryProgress = 0f
+                        onRespiratoryRateStateChange(MeasurementState.Idle)
+                    }
                 }
+
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
@@ -594,7 +629,7 @@ internal fun VitalsScreen(
         onDispose {
             screenActive.value = false
             lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
-            releaseHeartRateResources(deleteVideo = true)
+            interruptHeartRateMeasurement()
             val activeRespiratoryCollection = respiratoryCollectionJob
             activeRespiratoryCollection?.cancel()
             respiratorySampleSource.stop()
@@ -630,6 +665,11 @@ internal fun VitalsScreen(
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text(
+                text = "Coursework estimates only — not medical advice.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             MeasurementSection(
                 title = "Heart rate",
@@ -649,8 +689,12 @@ internal fun VitalsScreen(
                 onAction = {
                     if (cameraReady) startHeartRateRecording() else prepareHeartRateCamera()
                 },
-                onRetry = {
-                    if (cameraReady) startHeartRateRecording() else prepareHeartRateCamera()
+                onRetry = if (cameraHardwareError == null) {
+                    {
+                        if (cameraReady) startHeartRateRecording() else prepareHeartRateCamera()
+                    }
+                } else {
+                    null
                 },
                 progress = recordingProgress,
                 onCancel = if (cancellationRequested) null else ::cancelHeartRateRecording,
@@ -669,9 +713,7 @@ internal fun VitalsScreen(
                     "Motion sensor unavailable"
                 },
                 actionLabel = "Start 45-second measurement",
-                actionEnabled = canStartRespiratoryCollection(
-                    respiratoryCollectionJob != null
-                ),
+                actionEnabled = respiratoryCollectionJob == null,
                 onAction = ::startRespiratoryRateCollection,
                 onRetry = if (accelerometerError == null) {
                     ::startRespiratoryRateCollection
@@ -682,6 +724,13 @@ internal fun VitalsScreen(
                 onCancel = ::cancelRespiratoryRateCollection,
                 containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+
+            DebugFixtureTools(
+                heartRateState = heartRateState,
+                respiratoryRateState = respiratoryRateState,
+                onHeartRateStateChange = onHeartRateStateChange,
+                onRespiratoryRateStateChange = onRespiratoryRateStateChange
             )
 
             ContinueToSymptomsButton(
@@ -766,23 +815,47 @@ internal fun MeasurementSection(
                 }
 
                 MeasurementState.Collecting -> {
-                    Text("Collecting", color = contentColor)
+                    Text(
+                        text = "Collecting — keep still until the measurement finishes.",
+                        color = contentColor,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                        }
+                    )
                     if (progress == null) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics {
+                                    contentDescription = "$title collection progress"
+                                }
+                        )
                     } else {
+                        val progressPercent = (progress * 100).toInt()
                         LinearProgressIndicator(
                             progress = { progress },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics {
+                                    contentDescription = "$title collection progress"
+                                    stateDescription = "$progressPercent percent complete"
+                                }
                         )
                         Text(
-                            text = "${(progress * 100).toInt()}%",
+                            text = "$progressPercent%",
                             style = MaterialTheme.typography.labelLarge,
-                            color = contentColor
+                            color = contentColor,
+                            modifier = Modifier.semantics {
+                                liveRegion = LiveRegionMode.Polite
+                            }
                         )
                     }
                     onCancel?.let { cancel ->
                         OutlinedButton(
                             onClick = cancel,
+                            modifier = Modifier.semantics {
+                                contentDescription = "Cancel $title measurement"
+                            },
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = contentColor
                             )
@@ -793,15 +866,30 @@ internal fun MeasurementSection(
                 }
 
                 MeasurementState.Processing -> {
-                    Text("Processing", color = contentColor)
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = "Calculating estimate — keep this screen open.",
+                        color = contentColor,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                        }
+                    )
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics {
+                                contentDescription = "$title processing progress"
+                            }
+                    )
                 }
 
                 is MeasurementState.Success -> {
                     Text(
                         text = "${state.value.toInt()} $unit",
                         style = MaterialTheme.typography.headlineMedium,
-                        color = contentColor
+                        color = contentColor,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                        }
                     )
                 }
 
@@ -809,11 +897,17 @@ internal fun MeasurementSection(
                     Text(
                         text = state.message,
                         style = MaterialTheme.typography.bodyLarge,
-                        color = contentColor
+                        color = contentColor,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                        }
                     )
                     onRetry?.let { retry ->
                         OutlinedButton(
                             onClick = retry,
+                            modifier = Modifier.semantics {
+                                contentDescription = "Retry $title measurement"
+                            },
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = contentColor
                             )
